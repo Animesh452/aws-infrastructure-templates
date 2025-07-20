@@ -1,0 +1,255 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Storage Layer - S3 buckets for different purposes (static hosting, data storage, logs)'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, test, prod)
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    Default: modular-infra
+    AllowedPattern: '[a-z0-9-]*'
+    ConstraintDescription: Only lowercase letters, numbers, and hyphens
+  
+  EnableVersioning:
+    Type: String
+    Description: Enable versioning on data buckets
+    Default: true
+    AllowedValues: [true, false]
+  
+  EnableLogging:
+    Type: String
+    Description: Enable access logging
+    Default: true
+    AllowedValues: [true, false]
+
+Conditions:
+  EnableVersioningCondition: !Equals [!Ref EnableVersioning, true]
+  EnableLoggingCondition: !Equals [!Ref EnableLogging, true]
+
+Resources:
+  # Static Website Hosting Bucket
+  StaticWebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-website-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ['*']
+            MaxAge: 3600
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-website"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: StaticWebsite
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Static Website Bucket Policy
+  StaticWebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticWebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join
+              - ""
+              - - "arn:aws:s3:::"
+                - !Ref StaticWebsiteBucket
+                - /*
+
+  # Application Data Storage Bucket
+  DataStorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-data-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: !If [EnableVersioningCondition, Enabled, Suspended]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 90
+          - Id: TransitionToIA
+            Status: Enabled
+            Transition:
+              StorageClass: STANDARD_IA
+              TransitionInDays: 30
+          - Id: TransitionToGlacier
+            Status: Enabled
+            Transition:
+              StorageClass: GLACIER
+              TransitionInDays: 365
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-data"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: DataStorage
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Application Logs Bucket
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Condition: EnableLoggingCondition
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-logs-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+          - Id: TransitionLogsToIA
+            Status: Enabled
+            Transition:
+              StorageClass: STANDARD_IA
+              TransitionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-logs"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: LogStorage
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Backup Storage Bucket
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-backup-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: BackupRetention
+            Status: Enabled
+            ExpirationInDays: 2555  # 7 years
+          - Id: TransitionBackupsToGlacier
+            Status: Enabled
+            Transition:
+              StorageClass: GLACIER
+              TransitionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-backup"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: BackupStorage
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # CloudWatch Log Group for S3 events
+  S3LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/s3/${ProjectName}-${Environment}"
+      RetentionInDays: 30
+
+  # S3 Bucket for CloudFormation Templates (Infrastructure as Code storage)
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-templates-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-templates"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: InfrastructureAsCode
+        - Key: Project
+          Value: !Ref ProjectName
+
+Outputs:
+  StaticWebsiteBucketName:
+    Description: Name of the static website bucket
+    Value: !Ref StaticWebsiteBucket
+    Export:
+      Name: !Sub "${Environment}-StaticWebsiteBucket"
+
+  StaticWebsiteURL:
+    Description: URL of the static website
+    Value: !GetAtt StaticWebsiteBucket.WebsiteURL
+    Export:
+      Name: !Sub "${Environment}-StaticWebsiteURL"
+
+  DataStorageBucketName:
+    Description: Name of the data storage bucket
+    Value: !Ref DataStorageBucket
+    Export:
+      Name: !Sub "${Environment}-DataStorageBucket"
+
+  LogsBucketName:
+    Description: Name of the logs bucket
+    Value: !If [EnableLoggingCondition, !Ref LogsBucket, "Logging disabled"]
+    Export:
+      Name: !Sub "${Environment}-LogsBucket"
+
+  BackupBucketName:
+    Description: Name of the backup bucket
+    Value: !Ref BackupBucket
+    Export:
+      Name: !Sub "${Environment}-BackupBucket"
+
+  TemplatesBucketName:
+    Description: Name of the templates bucket
+    Value: !Ref TemplatesBucket
+    Export:
+      Name: !Sub "${Environment}-TemplatesBucket"
+
+  S3Summary:
+    Description: Summary of all S3 buckets created
+    Value: !Sub |
+      Website: ${StaticWebsiteBucket}
+      Data: ${DataStorageBucket}
+      Logs: ${LogsBucket}
+      Backup: ${BackupBucket}
+      Templates: ${TemplatesBucket}

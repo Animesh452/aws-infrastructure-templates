@@ -1,0 +1,392 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Compute Layer - EC2 instances using existing networking and security infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, test, prod)
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair for SSH access
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair
+  
+  InstanceType:
+    Type: String
+    Description: EC2 instance type
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+    ConstraintDescription: Must be a valid EC2 instance type
+  
+  ApplicationName:
+    Type: String
+    Description: Name of the application
+    Default: flask-demo
+    AllowedPattern: '[a-z0-9-]*'
+    ConstraintDescription: Only lowercase letters, numbers, and hyphens
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0c7217cdde317cfec  # Ubuntu 24.04 LTS
+    us-east-2:
+      AMI: ami-0ea3c35c5c3284d82  # Ubuntu 24.04 LTS
+    us-west-1:
+      AMI: ami-0d53d72369335a9d6  # Ubuntu 24.04 LTS
+    us-west-2:
+      AMI: ami-008fe2fc65df48dac  # Ubuntu 24.04 LTS
+    ap-south-1:
+      AMI: ami-0f5ee92e2d63afc18  # Ubuntu 24.04 LTS
+
+Resources:
+  # Web Server in Public Subnet
+  WebServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId: !ImportValue 
+        Fn::Sub: "${Environment}-PublicSubnetId"
+      SecurityGroupIds:
+        - !ImportValue 
+          Fn::Sub: "${Environment}-WebServerSGId"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt update -y
+          apt install -y python3 python3-pip python3-flask python3-venv git htop curl
+          
+          # Create application directory
+          mkdir -p /home/ubuntu/${ApplicationName}
+          cd /home/ubuntu/${ApplicationName}
+          
+          # Create enhanced Flask application
+          cat > app.py << 'EOF'
+          from flask import Flask, jsonify, request
+          import socket
+          import datetime
+          import os
+          import psutil  # For system stats
+          
+          app = Flask(__name__)
+          
+          @app.route('/')
+          def home():
+              hostname = socket.gethostname()
+              current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+              
+              return f'''
+              <!DOCTYPE html>
+              <html>
+              <head>
+                  <title>${ApplicationName} - ${Environment} Environment</title>
+                  <meta charset="UTF-8">
+                  <style>
+                      body {{ 
+                          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                          margin: 0; 
+                          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                          color: white; 
+                          min-height: 100vh;
+                          display: flex;
+                          align-items: center;
+                          justify-content: center;
+                      }}
+                      .container {{ 
+                          background: rgba(255,255,255,0.1); 
+                          padding: 40px; 
+                          border-radius: 20px; 
+                          backdrop-filter: blur(10px); 
+                          max-width: 900px;
+                          width: 90%;
+                          box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                      }}
+                      h1 {{ text-align: center; margin-bottom: 30px; font-size: 2.5em; }}
+                      .info-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 30px 0; }}
+                      .info-card {{ 
+                          background: rgba(255,255,255,0.2); 
+                          padding: 20px; 
+                          border-radius: 15px; 
+                          border-left: 4px solid #3498db;
+                      }}
+                      .status {{ background: rgba(46, 204, 113, 0.3); border-left-color: #2ecc71; }}
+                      .architecture {{ background: rgba(52, 152, 219, 0.3); border-left-color: #3498db; }}
+                      .environment {{ background: rgba(155, 89, 182, 0.3); border-left-color: #9b59b6; }}
+                      .links {{ text-align: center; margin-top: 30px; }}
+                      .links a {{ 
+                          display: inline-block; 
+                          margin: 10px; 
+                          padding: 15px 30px; 
+                          background: rgba(255,255,255,0.3); 
+                          color: white; 
+                          text-decoration: none; 
+                          border-radius: 25px; 
+                          transition: all 0.3s; 
+                          border: 2px solid rgba(255,255,255,0.2);
+                      }}
+                      .links a:hover {{ 
+                          background: rgba(255,255,255,0.5); 
+                          transform: translateY(-2px); 
+                          box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+                      }}
+                  </style>
+              </head>
+              <body>
+                  <div class="container">
+                      <h1>🚀 ${ApplicationName}</h1>
+                      
+                      <div class="info-grid">
+                          <div class="info-card status">
+                              <h3>✅ Deployment Status</h3>
+                              <p><strong>Environment:</strong> ${Environment}</p>
+                              <p><strong>Status:</strong> Running</p>
+                              <p><strong>Deployment:</strong> Modular CloudFormation</p>
+                          </div>
+                          
+                          <div class="info-card architecture">
+                              <h3>🏗️ Infrastructure</h3>
+                              <p><strong>Hostname:</strong> {hostname}</p>
+                              <p><strong>Timestamp:</strong> {current_time}</p>
+                              <p><strong>Architecture:</strong> Modular IaC</p>
+                          </div>
+                          
+                          <div class="info-card environment">
+                              <h3>🔧 Tech Stack</h3>
+                              <p><strong>Compute:</strong> EC2 with Auto-deployment</p>
+                              <p><strong>Network:</strong> VPC with Public/Private Subnets</p>
+                              <p><strong>Security:</strong> Layered Security Groups</p>
+                          </div>
+                      </div>
+                      
+                      <div class="links">
+                          <a href="/health">🔍 Health Check</a>
+                          <a href="/system">📊 System Info</a>
+                          <a href="/api/status">📡 API Status</a>
+                      </div>
+                      
+                      <hr style="margin: 30px 0; border: 1px solid rgba(255,255,255,0.3);">
+                      <p style="text-align: center;">
+                          <em>🏆 Deployed via Modular CloudFormation Templates</em><br>
+                          <small>Day 4: Advanced Infrastructure as Code</small>
+                      </p>
+                  </div>
+              </body>
+              </html>
+              '''
+          
+          @app.route('/health')
+          def health_check():
+              return jsonify({
+                  'status': 'healthy',
+                  'application': '${ApplicationName}',
+                  'environment': '${Environment}',
+                  'timestamp': datetime.datetime.now().isoformat(),
+                  'hostname': socket.gethostname(),
+                  'version': '1.0.0'
+              })
+          
+          @app.route('/system')
+          def system_info():
+              try:
+                  return jsonify({
+                      'hostname': socket.gethostname(),
+                      'environment': '${Environment}',
+                      'application': '${ApplicationName}',
+                      'system': {
+                          'cpu_percent': psutil.cpu_percent(interval=1),
+                          'memory_percent': psutil.virtual_memory().percent,
+                          'disk_percent': psutil.disk_usage('/').percent
+                      },
+                      'timestamp': datetime.datetime.now().isoformat()
+                  })
+              except:
+                  return jsonify({'error': 'System info not available'})
+          
+          @app.route('/api/status')
+          def api_status():
+              return jsonify({
+                  'api_version': '1.0',
+                  'environment': '${Environment}',
+                  'endpoints': [
+                      {'path': '/', 'method': 'GET', 'description': 'Main application page'},
+                      {'path': '/health', 'method': 'GET', 'description': 'Health check endpoint'},
+                      {'path': '/system', 'method': 'GET', 'description': 'System information'},
+                      {'path': '/api/status', 'method': 'GET', 'description': 'API documentation'}
+                  ],
+                  'infrastructure': {
+                      'compute_stack': '${Environment}-compute',
+                      'network_stack': '${Environment}-networking', 
+                      'security_stack': '${Environment}-security'
+                  }
+              })
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000, debug=False)
+          EOF
+          
+          # Install Python dependencies
+          apt install python3-psutil -y
+          
+          # Change ownership
+          chown -R ubuntu:ubuntu /home/ubuntu/${ApplicationName}
+          
+          # Create startup script
+          cat > /home/ubuntu/start-app.sh << 'EOF'
+          #!/bin/bash
+          cd /home/ubuntu/${ApplicationName}
+          nohup python3 app.py > app.log 2>&1 &
+          echo "Application started! PID: $!"
+          EOF
+          
+          chmod +x /home/ubuntu/start-app.sh
+          
+          # Start the application
+          sudo -u ubuntu /home/ubuntu/start-app.sh
+          
+          # Create a systemd service for production
+          cat > /etc/systemd/system/${ApplicationName}.service << EOF
+          [Unit]
+          Description=${ApplicationName} Flask Application
+          After=network.target
+          
+          [Service]
+          Type=simple
+          User=ubuntu
+          WorkingDirectory=/home/ubuntu/${ApplicationName}
+          ExecStart=/usr/bin/python3 app.py
+          Restart=always
+          RestartSec=3
+          
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          
+          # Enable but don't start systemd service (already running via startup script)
+          systemctl daemon-reload
+          systemctl enable ${ApplicationName}
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-${ApplicationName}-web"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Purpose
+          Value: WebServer
+        - Key: Tier
+          Value: Public
+
+  # Application Server in Private Subnet (optional - for demonstration)
+  AppServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      SubnetId: !ImportValue 
+        Fn::Sub: "${Environment}-PrivateSubnetId"
+      SecurityGroupIds:
+        - !ImportValue 
+          Fn::Sub: "${Environment}-AppServerSGId"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt update -y
+          apt install -y python3 python3-pip htop curl
+          
+          # Create simple internal API
+          mkdir -p /home/ubuntu/internal-api
+          cd /home/ubuntu/internal-api
+          
+          cat > api.py << 'EOF'
+          from flask import Flask, jsonify
+          import datetime
+          import socket
+          
+          app = Flask(__name__)
+          
+          @app.route('/internal/health')
+          def health():
+              return jsonify({
+                  'status': 'healthy',
+                  'service': 'internal-api',
+                  'environment': '${Environment}',
+                  'hostname': socket.gethostname(),
+                  'timestamp': datetime.datetime.now().isoformat()
+              })
+          
+          @app.route('/internal/data')
+          def get_data():
+              return jsonify({
+                  'data': 'This is internal application data',
+                  'source': 'private-subnet-server',
+                  'secure': True
+              })
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=8080)
+          EOF
+          
+          pip3 install flask
+          chown -R ubuntu:ubuntu /home/ubuntu/internal-api
+          
+          # Start internal API
+          cd /home/ubuntu/internal-api
+          nohup sudo -u ubuntu python3 api.py > api.log 2>&1 &
+
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-${ApplicationName}-app"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref ApplicationName
+        - Key: Purpose
+          Value: ApplicationServer
+        - Key: Tier
+          Value: Private
+
+Outputs:
+  WebServerInstanceId:
+    Description: ID of the web server instance
+    Value: !Ref WebServerInstance
+    Export:
+      Name: !Sub "${Environment}-WebServerInstanceId"
+
+  WebServerPublicIP:
+    Description: Public IP of the web server
+    Value: !GetAtt WebServerInstance.PublicIp
+    Export:
+      Name: !Sub "${Environment}-WebServerPublicIP"
+
+  WebServerPrivateIP:
+    Description: Private IP of the web server
+    Value: !GetAtt WebServerInstance.PrivateIp
+    Export:
+      Name: !Sub "${Environment}-WebServerPrivateIP"
+
+  AppServerInstanceId:
+    Description: ID of the application server instance
+    Value: !Ref AppServerInstance
+    Export:
+      Name: !Sub "${Environment}-AppServerInstanceId"
+
+  AppServerPrivateIP:
+    Description: Private IP of the application server
+    Value: !GetAtt AppServerInstance.PrivateIp
+    Export:
+      Name: !Sub "${Environment}-AppServerPrivateIP"
+
+  WebApplicationURL:
+    Description: URL to access the web application
+    Value: !Sub "http://${WebServerInstance.PublicIp}:5000"
+
+  SSHCommands:
+    Description: SSH commands for both instances
+    Value: !Sub |
+      Web Server: ssh -i ${KeyPairName}.pem ubuntu@${WebServerInstance.PublicIp}
+      App Server: ssh -i ${KeyPairName}.pem ubuntu@${AppServerInstance.PrivateIp} (via bastion/web server)

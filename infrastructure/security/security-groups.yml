@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Security Groups - Network Access Control for Different Application Tiers'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, test, prod)
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  
+  AllowedSSHCidr:
+    Type: String
+    Description: CIDR block allowed for SSH access
+    Default: 0.0.0.0/0
+    ConstraintDescription: Must be a valid CIDR range (e.g., 203.0.113.0/24)
+
+Resources:
+  # Web Server Security Group (Public-facing applications)
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Environment}-web-server-sg"
+      GroupDescription: Security group for web servers (HTTP, HTTPS, SSH)
+      VpcId: !ImportValue 
+        Fn::Sub: "${Environment}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP access from anywhere"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS access from anywhere"
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCidr
+          Description: "SSH access for administration"
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: 0.0.0.0/0
+          Description: "Flask application port"
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: "All outbound traffic allowed"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-web-server-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: WebServer
+
+  # Application Server Security Group (Internal applications)
+  AppServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Environment}-app-server-sg"
+      GroupDescription: Security group for application servers (accepts traffic from web servers only)
+      VpcId: !ImportValue 
+        Fn::Sub: "${Environment}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          DestinationSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: "Application port from web servers only"
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          DestinationSecurityGroupId: !Ref BastionSecurityGroup
+          Description: "SSH access from bastion host only"
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: "All outbound traffic allowed"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-app-server-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: ApplicationServer
+
+  # Database Security Group (Most restrictive)
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Environment}-database-sg"
+      GroupDescription: Security group for databases (accepts traffic from app servers only)
+      VpcId: !ImportValue 
+        Fn::Sub: "${Environment}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          DestinationSecurityGroupId: !Ref AppServerSecurityGroup
+          Description: "MySQL from application servers only"
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !Ref AppServerSecurityGroup
+          Description: "PostgreSQL from application servers only"
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          DestinationSecurityGroupId: !Ref AppServerSecurityGroup
+          Description: "Redis from application servers only"
+      # No outbound rules = default deny all outbound (databases typically don't need internet)
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-database-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: Database
+
+  # Bastion Host Security Group (Secure SSH access)
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Environment}-bastion-sg"
+      GroupDescription: Security group for bastion host (SSH jump server)
+      VpcId: !ImportValue 
+        Fn::Sub: "${Environment}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCidr
+          Description: "SSH access for bastion host"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !ImportValue 
+            Fn::Sub: "${Environment}-VpcCidr"
+          Description: "SSH to internal servers only"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-bastion-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: BastionHost
+
+  # Load Balancer Security Group
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Environment}-alb-sg"
+      GroupDescription: Security group for Application Load Balancer
+      VpcId: !ImportValue 
+        Fn::Sub: "${Environment}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP from internet"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS from internet"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          DestinationSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: "Forward HTTP to web servers"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: "Forward HTTPS to web servers"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-alb-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: LoadBalancer
+
+Outputs:
+  WebServerSecurityGroupId:
+    Description: ID of the Web Server Security Group
+    Value: !Ref WebServerSecurityGroup
+    Export:
+      Name: !Sub "${Environment}-WebServerSGId"
+
+  AppServerSecurityGroupId:
+    Description: ID of the Application Server Security Group
+    Value: !Ref AppServerSecurityGroup
+    Export:
+      Name: !Sub "${Environment}-AppServerSGId"
+
+  DatabaseSecurityGroupId:
+    Description: ID of the Database Security Group
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub "${Environment}-DatabaseSGId"
+
+  BastionSecurityGroupId:
+    Description: ID of the Bastion Host Security Group
+    Value: !Ref BastionSecurityGroup
+    Export:
+      Name: !Sub "${Environment}-BastionSGId"
+
+  LoadBalancerSecurityGroupId:
+    Description: ID of the Load Balancer Security Group
+    Value: !Ref LoadBalancerSecurityGroup
+    Export:
+      Name: !Sub "${Environment}-LoadBalancerSGId"
