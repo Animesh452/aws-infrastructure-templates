@@ -119,6 +119,7 @@ aws cloudformation create-stack \
 | **Total** | **~$16.00** |
 
 *Costs based on us-east-2 region with minimal usage patterns*
+*Since this was just a learning project, deleting stacks for compute and storage was the best choice to avoid costs. The only charges were while the instances were running which comes out to be a few cents each time any instance runs.*
 
 ## 🛠️ Management Commands
 
